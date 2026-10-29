@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
 
 @dataclass
 class EvaluationConfig:
@@ -50,11 +51,40 @@ class EvaluationConfig:
     
     # API configuration
     openai_api_key: Optional[str] = None
+    provider: str = "auto"
+    env_file: Optional[str] = None
+    loop_type: str = "standard"
+    api_concurrency: int = 1
+    reasoning_enabled: Optional[bool] = None
     
     def __post_init__(self):
         """Validate configuration after initialization."""
         if not self.model:
             raise ValueError("A model must be specified")
+
+        if type(self.api_concurrency) is not int or self.api_concurrency < 1:
+            raise ValueError("api_concurrency must be a positive integer")
+
+        if self.loop_type not in {"standard", "pseudocode"}:
+            raise ValueError("loop_type must be 'standard' or 'pseudocode'")
+
+        if self.provider not in {"auto", "openrouter"}:
+            raise ValueError("provider must be 'auto' or 'openrouter'")
+        if self.reasoning_enabled is not None:
+            if type(self.reasoning_enabled) is not bool or self.provider != "openrouter":
+                raise ValueError("reasoning_enabled requires a boolean and provider='openrouter'")
+        if self.env_file is not None:
+            if not Path(self.env_file).is_file():
+                raise ValueError(f"Environment file not found: {self.env_file}")
+            load_dotenv(self.env_file, override=False)
+        elif self.provider == "openrouter":
+            # Search from the working directory, including its parents (e.g. HW4/.env).
+            load_dotenv(find_dotenv(usecwd=True), override=False)
+
+        if self.provider == "openrouter" and not self.openai_api_key:
+            self.openai_api_key = os.environ.get("OPENROUTER_API_KEY")
+            if not self.openai_api_key:
+                raise ValueError("OpenRouter requires OPENROUTER_API_KEY in the environment or .env")
         
         if self.max_cycles <= 0:
             raise ValueError("max_cycles must be positive")
@@ -107,6 +137,10 @@ class EvaluationConfig:
         """Convert configuration to dictionary."""
         return {
             "model": self.model,
+            "provider": self.provider,
+            "loop_type": self.loop_type,
+            "api_concurrency": self.api_concurrency,
+            "reasoning_enabled": self.reasoning_enabled,
             "dataset": self.dataset,
             "languages": self.languages,
             "max_cycles": self.max_cycles,
@@ -129,7 +163,9 @@ class EvaluationConfig:
     def _create_model_config(self, model: str) -> Dict[str, Any]:
         """Create configuration for a specific model."""
         # Determine model type based on model name/path
-        if any(provider in model.lower() for provider in ["gpt", "chatgpt", "openai"]):
+        if self.provider == "openrouter":
+            model_type = "openai"
+        elif any(provider in model.lower() for provider in ["gpt", "chatgpt", "openai"]):
             model_type = "openai"
         elif "claude" in model.lower():
             model_type = "anthropic"
@@ -155,7 +191,15 @@ class EvaluationConfig:
                 "model_id": model,
                 "api_key": self.openai_api_key,
                 "max_tokens": self.max_model_len,
+                "api_concurrency": self.api_concurrency,
             })
+            if self.provider == "openrouter":
+                base_config.update({
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "max_tokens": self.max_new_tokens,
+                    "system_prompt": self.system_prompt,
+                    "reasoning_enabled": self.reasoning_enabled,
+                })
         elif model_type == "anthropic":
             base_config.update({
                 "model_id": model,
@@ -405,7 +449,7 @@ class EvaluationConfig:
     def get_task_configs(self, task_type: str = "code_generation_summarization") -> List[Dict[str, Any]]:
         """Generate task configurations based on task type."""
         if task_type == "code_generation_summarization":
-            return [
+            tasks = [
                 {
                     "type": "code_generation",
                     "language": "python",
@@ -416,6 +460,9 @@ class EvaluationConfig:
                     "prompt_template": "Use one sentence to summarize the following code and start with 'write a python function to':\n\n```\n{code}\n```\n\n```\nwrite a python function to\n```",
                 },
             ]
+            if self.loop_type == "pseudocode":
+                tasks[1] = {"type": "code_to_pseudocode"}
+            return tasks
         elif task_type == "code_translation":
             # Code translation is not currently supported but kept as interface
             raise NotImplementedError("Code translation is not currently supported")

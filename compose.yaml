@@ -1,0 +1,15 @@
+services:
+  benchmark:
+    build: .
+    image: hw4-eval
+    env_file:
+      - ../.env
+    volumes:
+      - ./results:/results
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: 4
+    mem_limit: 4g

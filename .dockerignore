@@ -1,0 +1,11 @@
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!run_hw4.py
+!analyze_hw4.py
+!constraints-hw4.txt
+!evaloop/
+!evaloop/**
+**/__pycache__/
+**/*.pyc

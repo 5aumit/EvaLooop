@@ -1,5 +1,10 @@
 # EvaLooop: LLM Robustness Evaluation Framework
 
+CSC 591 HW4 extension: [public fork](https://github.com/5aumit/EvaLooop/tree/hw4-pseudocode).
+The extension is based on upstream commit `ce22fe2f80c8f36da85cc8a0cca49c2bcc8b1cb9`.
+`constraints-hw4.txt` records the API experiment's installed dependency versions.
+The Docker image uses these versions and does not install the unused GPU runtime.
+
 [![arXiv](https://img.shields.io/badge/arXiv-2505.12185-b31b1b.svg)](https://arxiv.org/abs/2505.12185)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -49,6 +54,205 @@ evaloop evaluate --model "Qwen/Qwen2.5-Coder-32B-Instruct" \
 evaloop analyze --results_path "results/experiment_results.json" \
                 --judge_api_key_file api.key
 ```
+
+### Run the full HW4 comparison with Docker
+
+From this repository directory, with `OPENROUTER_API_KEY` in `../.env`:
+
+```bash
+docker compose build
+docker compose run --rm benchmark
+```
+
+The second command starts paid API calls and runs generated code inside the
+container. It evaluates all 378 MBPP Plus tasks using both
+`meta-llama/llama-3.1-8b-instruct` and `qwen/qwen3.7-flash`, each with the standard
+and pseudocode loops. Settings are temperature 0, top-p 1, 10 cycles, 1024 maximum
+new tokens, and four simultaneous API requests per run. The four configurations
+run sequentially. No GPU is required.
+
+Both Qwen configurations explicitly disable reasoning with OpenRouter's
+`reasoning: {enabled: false}` request option. A diagnostic with default reasoning
+used all 1024 output tokens for reasoning and returned no answer text. The
+explicit setting reserves that limit for answer generation and is recorded as
+`reasoning_enabled` in results. Llama keeps its default behavior. For manual CLI
+runs, use `--reasoning_enabled=False` with `--provider openrouter`.
+
+`run_hw4.py` contains the model IDs and settings. `Dockerfile` installs the API,
+testing, and analysis dependencies. `compose.yaml` loads the key at runtime and
+mounts only `./results`; `.dockerignore` excludes credentials and other local
+files from the image build.
+
+Results, per-run logs, analysis plots, and `summary.csv` appear in `results/`.
+Analysis reports `ASL_pow` as `asl_score`, matching the supplied package's
+`aslScore`, without calling a similarity judge.
+
+To check imports without paid calls:
+
+```bash
+docker compose run --rm benchmark --check
+```
+
+Press Ctrl+C to stop. Each configuration saves its JSON only when it finishes;
+an interrupted configuration cannot resume. The runner refuses to overwrite
+existing results. To start a separate comparison, use an empty subdirectory:
+
+```bash
+docker compose run --rm benchmark --output-dir /results/another-run
+```
+
+To run individual configurations in separate containers, select one model and
+loop and give each container a separate output directory. For example:
+
+```bash
+docker compose run -d --rm --name hw4-qwen-pseudocode benchmark \
+  --models qwen/qwen3.7-flash --loops pseudocode \
+  --output-dir /results/parallel/qwen-pseudocode
+```
+
+Each container uses up to four API requests, four CPUs, and 4 GB of memory.
+Do not also schedule those configurations in the default four-run launcher.
+
+### Reproduce the completed analysis without API calls
+
+The submission ZIP contains the four completed results files, `failure_annotations.json`,
+and a top-level `summary.csv`. The supplied course data and aborted runs are excluded.
+`analyze_hw4.py` validates identical task sets, stop rules, assertion preservation,
+and the Qwen reasoning setting before recomputing the numbers.
+
+From an unpacked submission directory containing `results/` and the analysis script:
+
+```bash
+python analyze_hw4.py --results-dir results --output-dir reproduced-analysis \
+  --annotations failure_annotations.json
+```
+
+Alternatively, build the fork's Docker image and run its analysis entry point with
+an unpacked submission mounted at `/submission`. This needs no API key or network:
+
+```bash
+docker run --rm --network none --entrypoint python \
+  --mount "type=bind,source=$PWD,target=/submission" hw4-eval \
+  /app/analyze_hw4.py --results-dir /submission/results \
+  --output-dir /submission/reproduced-analysis \
+  --annotations /submission/failure_annotations.json
+```
+
+The output includes `summary.csv`, `metrics.json`, `survival.csv`,
+`paired_comparison.csv`, `survival_comparison.png`, `survival_comparison.pdf`,
+and the traceable failure-review worksheet. The labels in the annotation file
+are AI-assisted static code-reading notes for author review, not outputs of an
+independent judge. No semantic-similarity judge was used in the reported scores.
+
+### OpenRouter
+
+Use `--provider openrouter` to send evaluations through OpenRouter instead of
+selecting a local model from its name. Keep the full OpenRouter model ID.
+
+Store `OPENROUTER_API_KEY` in your environment or `.env`. The command searches
+for `.env` from the working directory through its parents. Exported variables
+take priority over file values. To select a specific file, use `--env_file`.
+
+From the repository directory, with credentials in `../.env`:
+
+```bash
+evaloop evaluate --provider openrouter --model "qwen/qwen-2.5-coder-32b-instruct" \
+                --env_file ../.env --temperature 0 --max_cycles 10 \
+                --max_new_tokens 1024
+```
+
+This command performs a paid evaluation and executes generated code. Run it in
+a restricted environment, as required for all evaluations. Model availability
+depends on your OpenRouter account.
+
+Changes to the existing framework: `evaloop/cli.py` exposes the provider and
+environment-file options. `evaloop/core/config.py` loads credentials and selects
+the existing OpenAI-compatible client with OpenRouter's endpoint. OpenRouter
+uses `max_new_tokens` for the response limit. Both dependency lists now include
+`python-dotenv`. The standard loop, tests, and metrics are unchanged.
+
+### Parallel API requests
+
+Use `--api_concurrency 4` to send up to four requests at once per model.
+The default is 1. The limit must be a positive integer. For example:
+
+```bash
+evaloop evaluate --provider openrouter --model "meta-llama/llama-3.1-8b-instruct" \
+                --env_file ../.env --loop_type pseudocode --api_concurrency 4 \
+                --temperature 0 --max_cycles 10 --max_new_tokens 1024
+```
+
+This is a paid full-dataset run. Parallelism reduces waiting time, not token
+cost. Each batch runs independent requests in a thread pool and returns results
+in prompt order. The cycle runner generates code across tasks, then descriptions,
+then tests the code. Later cycles only include passing tasks. Requests retain
+the existing per-request retries and error handling. The limit is per model;
+separate evaluation processes each have their own limit.
+
+`evaloop/models/closed_source.py` implements parallel requests.
+`evaloop/core/config.py` and `evaloop/cli.py` expose the limit.
+`evaloop/models/factory.py` now imports local-model libraries only when selecting
+a local model. API models do not require a GPU or vLLM at runtime; functional
+testing still needs a restricted CPU environment. The package's existing full
+dependency list still includes local-model packages.
+
+### Pseudocode loop (HW4 extension)
+
+Research question: does structured pseudocode preserve task behavior across
+cycles better than prose summaries?
+
+Select `--loop_type standard` (the default) or `--loop_type pseudocode`:
+
+```text
+standard:   original task -> Python code -> prose summary -> Python code -> ...
+pseudocode: original task -> Python code -> pseudocode    -> Python code -> ...
+```
+
+Both loops use the same first generation prompt, model, original MBPP Plus
+tests, and assertion wrapper. Only the code-to-description prompt changes.
+The exact extension prompt is `PSEUDOCODE_PROMPT` in
+`evaloop/tasks/code_to_pseudocode.py`. It requests FUNCTION, INPUTS, OUTPUT,
+STEPS, and END FUNCTION, with plain-English steps that preserve actual behavior.
+The same model performs both steps, with a fresh context for each call.
+
+The full pseudocode response is stripped of surrounding whitespace and wrapped
+with the original example assertion. No judge, repair model, or external
+perturbation is introduced. Formatting is requested but not enforced: malformed
+responses remain in the saved records for failure analysis. The function name
+and calling pattern remain anchored by the same assertion used by the standard
+loop. Both original and extended tests must pass to continue. Testing failure
+stops the task, or the task completes after the configured cycle limit. The
+current runner produces the description before testing but only carries it
+into another cycle when tests pass.
+
+To compare the configurations, run each with the same model and settings in a
+restricted environment. From the repository directory:
+
+```bash
+evaloop evaluate --provider openrouter --model "qwen/qwen-2.5-coder-32b-instruct" \
+                --env_file ../.env --loop_type standard --temperature 0 \
+                --max_cycles 10 --max_new_tokens 1024 --experiment_name comparison
+evaloop evaluate --provider openrouter --model "qwen/qwen-2.5-coder-32b-instruct" \
+                --env_file ../.env --loop_type pseudocode --temperature 0 \
+                --max_cycles 10 --max_new_tokens 1024 --experiment_name comparison
+```
+
+These commands run the full MBPP Plus dataset and incur API costs. Results
+include `loop_type`; filenames end in `code_generation_summarization_results.json`
+or `code_generation_pseudocode_results.json`. Existing analysis accepts both.
+Use `--metrics "ASL_pow,pass@1,pass_drop"` to analyze without a similarity judge;
+the supplied data package's `aslScore` corresponds to `ASL_pow`.
+
+Changes to the existing framework: `evaloop/tasks/__init__.py` registers the new
+task, `evaloop/core/config.py` selects it, `evaloop/cli.py` exposes `--loop_type`,
+and `evaloop/core/evaluator.py` labels and saves each configuration separately.
+The cycle runner, functional tests, generation prompt, and scoring formulas
+are unchanged. The extension changes both structure and requested detail, so
+an observed difference cannot be attributed to structure alone.
+
+Offline checks: `python -m pytest tests/test_pseudocode.py tests/test_openrouter.py`.
+These use simulated model responses and test outcomes. They establish loop
+wiring and stopping behavior, not robustness results from evaluated models.
 
 ## 🔄 How the Loop Works
 

@@ -92,6 +92,11 @@ class EvaLoopCLI:
         preferred_batch_size: int = 64,
         is_chat_model: bool = True,
         system_prompt: str = "You are a helpful programming assistant.",
+        provider: str = "auto",
+        env_file: Optional[str] = None,
+        loop_type: str = "standard",
+        api_concurrency: int = 1,
+        reasoning_enabled: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Run code generation and summarization evaluation experiment.
@@ -114,6 +119,11 @@ class EvaLoopCLI:
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR).
             experiment_name: Name for the experiment (auto-generated if None).
             openai_api_key: OpenAI API key (can also be set via OPENAI_API_KEY env var).
+            provider: 'auto' for existing model detection, or 'openrouter' for hosted models.
+            env_file: Optional .env path. OpenRouter otherwise searches the working directory and parents.
+            loop_type: 'standard' for prose summaries, or 'pseudocode' for structured pseudocode.
+            api_concurrency: Maximum simultaneous API requests per model (default 1).
+            reasoning_enabled: Optional OpenRouter reasoning switch; omitted by default.
             gpu_ids: Comma-separated GPU IDs for VLLM models (e.g., "0,1,2,3").
             tensor_parallel_size: Number of GPUs for tensor parallelism.
             gpu_memory_utilization: GPU memory utilization ratio for VLLM.
@@ -203,6 +213,11 @@ class EvaLoopCLI:
             is_chat_model=is_chat_model,
             system_prompt=system_prompt,
             openai_api_key=openai_api_key,
+            provider=provider,
+            env_file=env_file,
+            loop_type=loop_type,
+            api_concurrency=api_concurrency,
+            reasoning_enabled=reasoning_enabled,
         )
         # Log model type detection results
         model_config = config.get_model_config()

@@ -41,7 +41,7 @@ class EvaLoopEvaluator:
         Returns:
             List of evaluation results (single model result in list for consistency).
         """
-        self.logger.info("Starting code generation and summarization evaluation")
+        self.logger.info(f"Starting {self.config.loop_type} evaluation")
         
         # Setup components
         model = self._create_model()
@@ -53,7 +53,11 @@ class EvaLoopEvaluator:
         model_result = self._run_evaluation_cycles(model, tasks, prompts, py_problems, tester)
         
         # Save and return results
-        self._save_results([model_result], "code_generation_summarization")
+        experiment_type = (
+            "code_generation_pseudocode" if self.config.loop_type == "pseudocode"
+            else "code_generation_summarization"
+        )
+        self._save_results([model_result], experiment_type)
         return [model_result]
     
     def run_code_translation(self) -> Dict[str, Any]:
@@ -142,6 +146,8 @@ class EvaLoopEvaluator:
         """Initialize the model result structure."""
         model_result = {
             "model": str(model),
+            "loop_type": self.config.loop_type,
+            "reasoning_enabled": self.config.reasoning_enabled,
             # Loop budget M; needed by the analyzer to normalize the ASL metrics
             "max_cycles": self.config.max_cycles,
             "prompt_results": []

@@ -3,6 +3,7 @@ from openai import OpenAI
 from typing import Any, Dict, List
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .base import BaseLLM
 
@@ -65,6 +66,9 @@ class OpenAILLM(BaseLLM):
 
     def __init__(self, model_config: Dict[str, Any]):
         super().__init__(model_config)
+        self.api_concurrency = model_config.get("api_concurrency", 1)
+        if type(self.api_concurrency) is not int or self.api_concurrency < 1:
+            raise ValueError("api_concurrency must be a positive integer")
         self.api_key = model_config.get("api_key")
         self.model_id = model_config.get("model_id", "gpt-3.5-turbo")
         self.max_tokens = model_config.get("max_tokens", 4096)
@@ -76,6 +80,7 @@ class OpenAILLM(BaseLLM):
         # Set default to greedy decoding
         self.temperature = model_config.get("temperature", 0.0)  # 0.0 = greedy decoding
         self.top_p = model_config.get("top_p", 1.0)  # 1.0 = no nucleus sampling
+        self.reasoning_enabled = model_config.get("reasoning_enabled")
 
         # Hardcoded retry parameters
         self.max_retries = 10  # Maximum number of retry attempts
@@ -83,6 +88,15 @@ class OpenAILLM(BaseLLM):
 
         # Create client in init to avoid recreating for each request
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    def batch_generate(self, prompts: List[str], **kwargs) -> List[str]:
+        """Send independent requests concurrently, retaining input order.
+
+        Each worker uses generate(), including its existing per-request retry
+        and error handling. The limit applies to this model's current batch.
+        """
+        with ThreadPoolExecutor(max_workers=self.api_concurrency) as pool:
+            return list(pool.map(lambda prompt: self.generate(prompt, **kwargs), prompts))
 
     def _build_messages(self, prompt: str, include_system: bool) -> List[Dict[str, str]]:
         """
@@ -133,6 +147,10 @@ class OpenAILLM(BaseLLM):
         # Filter out parameters that are explicitly handled
         filtered_kwargs = {k: v for k, v in kwargs.items() 
                          if k not in ["max_tokens", "temperature", "top_p", "model_id"]}
+        if self.reasoning_enabled is not None:
+            extra_body = dict(filtered_kwargs.get("extra_body") or {})
+            extra_body["reasoning"] = {"enabled": self.reasoning_enabled}
+            filtered_kwargs["extra_body"] = extra_body
         
         # Initialize logger
         logger = logging.getLogger(__name__)
